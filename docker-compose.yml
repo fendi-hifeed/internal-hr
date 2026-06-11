@@ -1,0 +1,95 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hifeed_hr_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hifeed_openclaw
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: hr_presensi
+    ports:
+      - "5432:5432"
+    volumes:
+      - hr_presensi_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hifeed_openclaw -d hr_presensi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hifeed_hr_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://hifeed_openclaw:admin123@db:5432/hr_presensi
+      DATABASE_URL_SYNC: postgresql://hifeed_openclaw:admin123@db:5432/hr_presensi
+      DEBUG: "true"
+    ports:
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hifeed_hr_seed
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://hifeed_openclaw:admin123@db:5432/hr_presensi
+      DATABASE_URL_SYNC: postgresql://hifeed_openclaw:admin123@db:5432/hr_presensi
+      DEBUG: "true"
+    command: ["python", "seed.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    profiles:
+      - init
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hifeed_hr_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8001
+    ports:
+      - "3001:3001"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3001/hr/login || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: hifeed_hr_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+volumes:
+  hr_presensi_data:
